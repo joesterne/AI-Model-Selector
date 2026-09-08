@@ -46,6 +46,15 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.border
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // Retro LCD Monochrome Palette
@@ -128,6 +137,96 @@ fun RetroBatteryIcon(level: Float, modifier: Modifier = Modifier, color: Color) 
     }
 }
 
+fun Modifier.lcdScrollbar(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    color: Color
+): Modifier = composed {
+    val alpha by animateFloatAsState(
+        targetValue = if (listState.isScrollInProgress) 1f else 0f,
+        animationSpec = tween(durationMillis = 300),
+        label = "scrollbar_alpha"
+    )
+    
+    drawWithContent {
+        drawContent()
+        if (alpha > 0f) {
+            val firstVisibleElement = listState.layoutInfo.visibleItemsInfo.firstOrNull()
+            if (firstVisibleElement != null) {
+                val totalItems = listState.layoutInfo.totalItemsCount
+                val visibleItems = listState.layoutInfo.visibleItemsInfo.size
+                if (totalItems > visibleItems) {
+                    val scrollbarWidth = 8.dp.toPx()
+                    val trackHeight = size.height
+                    val thumbHeight = maxOf((visibleItems.toFloat() / totalItems) * trackHeight, 16.dp.toPx())
+                    
+                    val scrollRange = totalItems - visibleItems
+                    val scrollProgress = if (scrollRange > 0) listState.firstVisibleItemIndex.toFloat() / scrollRange else 0f
+                    val thumbY = scrollProgress * (trackHeight - thumbHeight)
+
+                    // Outline
+                    drawRect(
+                        color = color.copy(alpha = alpha),
+                        topLeft = Offset(size.width - scrollbarWidth, 0f),
+                        size = Size(scrollbarWidth, trackHeight),
+                        style = Stroke(width = 1.dp.toPx())
+                    )
+
+                    // Thumb
+                    drawRect(
+                        color = color.copy(alpha = alpha),
+                        topLeft = Offset(size.width - scrollbarWidth, thumbY),
+                        size = Size(scrollbarWidth, thumbHeight)
+                    )
+                }
+            }
+        }
+    }
+}
+
+fun Modifier.lcdScrollbar(
+    scrollState: androidx.compose.foundation.ScrollState,
+    color: Color
+): Modifier = composed {
+    val alpha by animateFloatAsState(
+        targetValue = if (scrollState.isScrollInProgress) 1f else 0f,
+        animationSpec = tween(durationMillis = 300),
+        label = "scrollbar_alpha"
+    )
+    
+    drawWithContent {
+        drawContent()
+        if (alpha > 0f) {
+            val maxValue = scrollState.maxValue
+            if (maxValue > 0) {
+                val scrollbarWidth = 8.dp.toPx()
+                val trackHeight = size.height
+                
+                val viewportHeight = size.height
+                val totalHeight = viewportHeight + maxValue
+                val thumbHeight = maxOf((viewportHeight / totalHeight) * trackHeight, 16.dp.toPx())
+                
+                val scrollProgress = scrollState.value.toFloat() / maxValue
+                val thumbY = scrollProgress * (trackHeight - thumbHeight)
+
+                // Outline
+                drawRect(
+                    color = color.copy(alpha = alpha),
+                    topLeft = Offset(size.width - scrollbarWidth, 0f),
+                    size = Size(scrollbarWidth, trackHeight),
+                    style = Stroke(width = 1.dp.toPx())
+                )
+
+                // Thumb
+                drawRect(
+                    color = color.copy(alpha = alpha),
+                    topLeft = Offset(size.width - scrollbarWidth, thumbY),
+                    size = Size(scrollbarWidth, thumbHeight)
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun StudioPodScreen(
     programs: List<ProgramEntity>,
@@ -140,6 +239,23 @@ fun StudioPodScreen(
     val detailScrollState = rememberScrollState()
     val batteryLevel = rememberBatteryLevel()
     val coroutineScope = rememberCoroutineScope()
+
+    var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var isAsleep by remember { mutableStateOf(false) }
+
+    var showExitConfirmation by remember { mutableStateOf(false) }
+    var exitSelectionYes by remember { mutableStateOf(false) }
+    val activity = LocalContext.current as? android.app.Activity
+
+    BackHandler {
+        showExitConfirmation = true
+    }
+
+    LaunchedEffect(lastInteractionTime) {
+        isAsleep = false
+        delay(10000L) // 10 seconds to sleep
+        isAsleep = true
+    }
 
     // Ensure index is within bounds if list shrinks
     LaunchedEffect(programs) {
@@ -158,7 +274,15 @@ fun StudioPodScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFE0E0E0)),
+            .background(Color(0xFFE0E0E0))
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while(true) {
+                        awaitPointerEvent(PointerEventPass.Initial)
+                        lastInteractionTime = System.currentTimeMillis()
+                    }
+                }
+            },
         contentAlignment = Alignment.Center
     ) {
         // The iPod Body
@@ -191,31 +315,94 @@ fun StudioPodScreen(
                         .clip(RoundedCornerShape(4.dp))
                         .background(lcdBg)
                 ) {
-                    AnimatedContent(
-                        targetState = screenState,
-                        transitionSpec = {
-                            if (targetState == PodScreenState.DETAILS) {
-                                (slideInHorizontally { width -> width } + fadeIn()).togetherWith(
-                                    slideOutHorizontally { width -> -width } + fadeOut())
-                            } else {
-                                (slideInHorizontally { width -> -width } + fadeIn()).togetherWith(
-                                    slideOutHorizontally { width -> width } + fadeOut())
+                    Crossfade(
+                        targetState = isAsleep,
+                        label = "sleep_crossfade",
+                        animationSpec = tween(600)
+                    ) { asleep ->
+                        if (asleep) {
+                            SleepClockScreen(batteryLevel = batteryLevel)
+                        } else {
+                            AnimatedContent(
+                                targetState = screenState,
+                                transitionSpec = {
+                                    if (targetState == PodScreenState.DETAILS) {
+                                        (slideInHorizontally { width -> width } + fadeIn()).togetherWith(
+                                            slideOutHorizontally { width -> -width } + fadeOut())
+                                    } else {
+                                        (slideInHorizontally { width -> -width } + fadeIn()).togetherWith(
+                                            slideOutHorizontally { width -> width } + fadeOut())
+                                    }
+                                },
+                                label = "screen_transition"
+                            ) { state ->
+                                when (state) {
+                                    PodScreenState.LIST -> PodListScreen(
+                                        programs = programs,
+                                        selectedIndex = selectedIndex,
+                                        listState = listState,
+                                        batteryLevel = batteryLevel
+                                    )
+                                    PodScreenState.DETAILS -> PodDetailScreen(
+                                        program = selectedProgram,
+                                        batteryLevel = batteryLevel,
+                                        scrollState = detailScrollState
+                                    )
+                                }
                             }
-                        },
-                        label = "screen_transition"
-                    ) { state ->
-                        when (state) {
-                            PodScreenState.LIST -> PodListScreen(
-                                programs = programs,
-                                selectedIndex = selectedIndex,
-                                listState = listState,
-                                batteryLevel = batteryLevel
-                            )
-                            PodScreenState.DETAILS -> PodDetailScreen(
-                                program = selectedProgram,
-                                batteryLevel = batteryLevel,
-                                scrollState = detailScrollState
-                            )
+                        }
+                    }
+
+                    // Backlight dimming overlay
+                    val backlightAlpha by animateFloatAsState(
+                        targetValue = if (isAsleep) 0.65f else 0f,
+                        animationSpec = tween(1500),
+                        label = "backlight_dim"
+                    )
+                    
+                    if (backlightAlpha > 0f) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = backlightAlpha))
+                        )
+                    }
+
+                    if (showExitConfirmation) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(lcdBg.copy(alpha = 0.9f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .border(2.dp, lcdFg)
+                                    .background(lcdBg)
+                                    .padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text("Power Off?", fontWeight = FontWeight.Bold, color = lcdFg)
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    Text(
+                                        "Yes",
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (exitSelectionYes) lcdBg else lcdFg,
+                                        modifier = Modifier
+                                            .background(if (exitSelectionYes) lcdFg else Color.Transparent)
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                    Text(
+                                        "No",
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (!exitSelectionYes) lcdBg else lcdFg,
+                                        modifier = Modifier
+                                            .background(if (!exitSelectionYes) lcdFg else Color.Transparent)
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -226,7 +413,9 @@ fun StudioPodScreen(
             // Click Wheel area
             ClickWheel(
                 onScroll = { direction ->
-                    if (screenState == PodScreenState.LIST && programs.isNotEmpty()) {
+                    if (showExitConfirmation) {
+                        if (direction > 0) exitSelectionYes = false else exitSelectionYes = true
+                    } else if (screenState == PodScreenState.LIST && programs.isNotEmpty()) {
                         if (direction > 0) {
                             selectedIndex = minOf(selectedIndex + 1, programs.size - 1)
                         } else {
@@ -239,12 +428,20 @@ fun StudioPodScreen(
                     }
                 },
                 onMenuClick = {
-                    if (screenState == PodScreenState.DETAILS) {
+                    if (showExitConfirmation) {
+                        showExitConfirmation = false
+                    } else if (screenState == PodScreenState.DETAILS) {
                         screenState = PodScreenState.LIST
                     }
                 },
                 onCenterClick = {
-                    if (screenState == PodScreenState.LIST && programs.isNotEmpty()) {
+                    if (showExitConfirmation) {
+                        if (exitSelectionYes) {
+                            activity?.finish()
+                        } else {
+                            showExitConfirmation = false
+                        }
+                    } else if (screenState == PodScreenState.LIST && programs.isNotEmpty()) {
                         selectedProgram = programs[selectedIndex]
                         screenState = PodScreenState.DETAILS
                     }
@@ -265,6 +462,58 @@ fun StudioPodScreen(
         ) {
             Icon(Icons.Default.Add, contentDescription = "Add Program")
         }
+    }
+}
+
+@Composable
+fun SleepClockScreen(batteryLevel: Float) {
+    var currentTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    
+    LaunchedEffect(Unit) {
+        while(true) {
+            currentTime = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
+    
+    val timeFormatter = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
+    val dateFormatter = remember { java.text.SimpleDateFormat("EEE, MMM d", java.util.Locale.getDefault()) }
+    
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Status Bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RetroBatteryIcon(
+                level = batteryLevel,
+                color = lcdFg
+            )
+        }
+        
+        Spacer(modifier = Modifier.weight(1f))
+        
+        Text(
+            text = timeFormatter.format(java.util.Date(currentTime)),
+            fontSize = 42.sp,
+            fontWeight = FontWeight.Bold,
+            color = lcdFg
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = dateFormatter.format(java.util.Date(currentTime)),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = lcdFg
+        )
+        
+        Spacer(modifier = Modifier.weight(1.5f))
     }
 }
 
@@ -306,7 +555,9 @@ fun PodListScreen(programs: List<ProgramEntity>, selectedIndex: Int, listState: 
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxSize()
+                    .lcdScrollbar(listState, lcdFg)
             ) {
                 itemsIndexed(programs) { index, program ->
                     val isSelected = (index == selectedIndex)
@@ -385,6 +636,7 @@ fun PodDetailScreen(program: ProgramEntity?, batteryLevel: Float, scrollState: a
             modifier = Modifier
                 .fillMaxSize()
                 .padding(12.dp)
+                .lcdScrollbar(scrollState, lcdFg)
                 .verticalScroll(scrollState)
         ) {
             Text(
