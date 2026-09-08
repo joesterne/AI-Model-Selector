@@ -1,0 +1,6 @@
+{
+  "name": "StudioPod",
+  "description": "A retro iPod-style app for navigating AI Studio programs",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
