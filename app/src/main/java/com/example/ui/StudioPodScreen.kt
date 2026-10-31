@@ -9,7 +9,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -77,7 +76,7 @@ fun rememberBatteryLevel(): Float {
             override fun onReceive(context: Context, intent: Intent) {
                 val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
                 val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-                if (level != -1 && scale != -1) {
+                if (level >= 0 && scale > 0) {
                     batteryLevel = level.toFloat() / scale.toFloat()
                 }
             }
@@ -87,7 +86,7 @@ fun rememberBatteryLevel(): Float {
         if (currentIntent != null) {
             val level = currentIntent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
             val scale = currentIntent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-            if (level != -1 && scale != -1) {
+            if (level >= 0 && scale > 0) {
                 batteryLevel = level.toFloat() / scale.toFloat()
             }
         }
@@ -442,8 +441,12 @@ fun StudioPodScreen(
                             showExitConfirmation = false
                         }
                     } else if (screenState == PodScreenState.LIST && programs.isNotEmpty()) {
-                        selectedProgram = programs[selectedIndex]
-                        screenState = PodScreenState.DETAILS
+                        // getOrNull: the LaunchedEffect clamp runs after recomposition, so a
+                        // just-shrunk list could otherwise make this index throw.
+                        programs.getOrNull(selectedIndex)?.let {
+                            selectedProgram = it
+                            screenState = PodScreenState.DETAILS
+                        }
                     }
                 }
             )
